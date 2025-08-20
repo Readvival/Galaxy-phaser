@@ -1,0 +1,458 @@
+<!doctype html>
+<html>
+<head> 
+    <meta charset="UTF-8"> 
+    <meta name="viewport" id="viewport" content="width=device-width, initial-scale=1"> 
+    <link rel="shortcut icon" href="favicon.png" type="image/x-icon">
+    <title>GALAXY</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+<body> 
+
+<script src="phaser.min.js"></script>
+<script>
+const config = {
+    type: Phaser.AUTO,
+    width: window.innerWidth,
+    height: window.innerHeight,
+    scale: {
+        mode: Phaser.Scale.RESIZE,
+        autoCenter: Phaser.Scale.CENTER_BOTH
+    },
+    input: {
+        activePointers: 5
+    },
+    physics: {
+        default: 'arcade',
+        arcade: {
+            gravity: { y: 0 },
+            debug: false
+        }
+    },
+    pixelArt: true,
+    scene: { preload, create, update }
+};
+
+let bg;
+let title;
+let startButton;
+let player;
+let enemyGroup;
+let enemySpawnTimer;
+let playerHp = 100;
+let playerXp = 0;  // added player experience variable
+let plasmaGroup;
+let shootTimer;
+let enemyBulletGroup;
+let canSpawnEnemies = true;
+
+let turret;        // The main player turret assistant (added if powerup given)
+let turretHp = 50; // Turret HP
+let turretPlasmaGroup; // Plasma group for turret shooting
+let turretShootTimer;
+
+function preload(){
+    //background
+    this.load.image("background","assets/background.png");
+    
+    //player 
+    this.load.image("player01","assets/playerBlue.png")
+    
+    //weapon Shoot
+    this.load.image("smallPlasma","assets/smallPlasma.png");
+    this.load.image("mediumPlasma","assets/mediumPlasma.png");
+    this.load.image("largePlasma","assets/largePlasma.png");
+    
+    //enemy bullets
+    this.load.image("enemyBullet","assets/enemyBullet.png");
+    
+    //Enemy
+    this.load.image("enemy01","assets/enemy01.png");
+    this.load.image("enemy02","assets/enemy02.png");
+    this.load.image("enemy03","assets/enemy03.png");
+    this.load.image("enemy04","assets/enemy04.png");
+    //asteriods
+    this.load.image("asteriod01","assets/asteroid01.png");
+    this.load.image("asteriod02","assets/asteroid02.png");
+    this.load.image("asteriod03","assets/asteroid03.png");
+    this.load.image("asteriod04","assets/asteroid04.png");
+    //health items
+    this.load.image("healthItem","assets/healthItem.png");
+    //energy items
+    this.load.image("energyItem","assets/energyItem.png");
+    //powerups items
+    this.load.image("powerupItem","assets/powerupItem.png");
+
+    this.load.image("turret01","assets/turret01.png");
+
+}
+
+function create(){
+    
+    bg = this.add.tileSprite(0, 0, this.sys.game.config.width, this.sys.game.config.height, 'background').setOrigin(0, 0);
+    resizeBackground.call(this);
+
+    // Adjust when screen resizes or phone rotates
+    this.scale.on('resize', (gameSize) => {
+        resizeBackground.call(this, gameSize);
+    });
+    
+    title = this.add.text(this.scale.width / 2,200,"Galaxy Adventure",{fontSize: "32px", color: "#fff"}).setOrigin(0.5)
+    
+    startButton = this.add.text(this.scale.width / 2,350,"Start",{ fontSize: "25px" ,color: "#fff"}).setInteractive().setOrigin(0.5)
+    startButton.on("pointerdown", () => startGame.call(this))
+    
+}
+
+function resizeBackground(gameSize) {
+    const width = gameSize ? gameSize.width : this.sys.game.config.width;
+    const height = gameSize ? gameSize.height : this.sys.game.config.height;
+
+    bg.displayWidth = width;
+    bg.displayHeight = height;
+}
+
+function startGame() {
+    startButton.destroy();
+    title.destroy();
+
+    player = this.physics.add.image(this.scale.width / 2, 480, "player01");
+    player.setInteractive({ draggable: true });
+    this.input.setDraggable(player);
+    player.setCollideWorldBounds(true);
+
+    // Create a group for plasma bullets
+    plasmaGroup = this.physics.add.group();
+    
+    enemyBulletGroup = this.physics.add.group();
+    
+    enemyGroup = this.physics.add.group();
+
+    turretPlasmaGroup = this.physics.add.group();
+
+    // Auto shoot plasma every 300ms
+    shootTimer = this.time.addEvent({
+        delay: 300,
+        callback: shootPlasma,
+        callbackScope: this,
+        loop: true
+    });
+    
+    // Enemy shoots every 1.5 seconds
+    this.time.addEvent({
+        delay: 1500,
+        callback: enemyShoot,
+        callbackScope: this,
+        loop: true
+    });
+
+    // Turret shoots plasma every 350ms (only if exists)
+    turretShootTimer = this.time.addEvent({
+        delay: 350,
+        callback: shootTurretPlasma,
+        callbackScope: this,
+        loop: true
+    });
+
+    this.input.on('drag', (pointer, gameObject, dragX, dragY) => {
+        const clampedX = Phaser.Math.Clamp(dragX, player.displayWidth / 2, this.sys.game.config.width - player.displayWidth / 2);
+        const clampedY = Phaser.Math.Clamp(dragY, player.displayHeight / 2, this.sys.game.config.height - player.displayHeight / 2);
+
+        gameObject.x = clampedX;
+        gameObject.y = clampedY;
+    });
+    
+    scheduleEnemySpawn.call(this);
+    
+    // Collisions and overlaps
+    this.physics.add.overlap(plasmaGroup, enemyGroup, plasmaHitsEnemy, null, this);
+    this.physics.add.overlap(turretPlasmaGroup, enemyGroup, plasmaHitsEnemy, null, this); // turret plasma hits enemies too
+    
+    this.physics.add.overlap(player, enemyBulletGroup, enemyBulletHitsPlayer, null, this);
+    
+    this.physics.add.overlap(turret, enemyBulletGroup, enemyBulletHitsTurret, null, this);  // turret can be hit by enemy bullets
+    
+}
+
+// Player shoots plasma
+function shootPlasma() {
+    if (!player) return;
+
+    const plasma = plasmaGroup.create(player.x, player.y - player.displayHeight / 2, 'smallPlasma');
+    plasma.setVelocityY(-300);
+    plasma.setCollideWorldBounds(false);
+    plasma.setDepth(1);
+    plasma.setScale(0.5);
+    plasma.checkWorldBounds = true;
+    plasma.outOfBoundsKill = true;
+}
+
+// Turret shoots plasma if turret exists
+function shootTurretPlasma() {
+    if (!turret || !turret.active) return;
+
+    const plasma = turretPlasmaGroup.create(turret.x, turret.y - turret.displayHeight / 2, 'smallPlasma');
+    plasma.setVelocityY(-300);
+    plasma.setCollideWorldBounds(false);
+    plasma.setDepth(1);
+    plasma.setScale(0.5);
+    plasma.checkWorldBounds = true;
+    plasma.outOfBoundsKill = true;
+}
+
+function enemyShoot() {
+    if (!enemyGroup) return;
+
+    enemyGroup.children.each(enemy => {
+        if (!enemy.active) return;
+
+        // Create a bullet at enemy position
+        const bullet = enemyBulletGroup.create(enemy.x, enemy.y + enemy.displayHeight / 2, 'enemyBullet');
+        
+        bullet.setVelocityY(200);
+        bullet.setCollideWorldBounds(false);
+        bullet.setDepth(1);
+        bullet.setScale(0.5);
+        bullet.checkWorldBounds = true;
+        bullet.outOfBoundsKill = true;
+    });
+}
+
+function scheduleEnemySpawn() {
+    const delay = Phaser.Math.Between(4000, 6000);
+    enemySpawnTimer = this.time.addEvent({
+        delay: delay,
+        callback: spawnEnemies,
+        callbackScope: this,
+        loop: false
+    });
+}
+
+function spawnEnemies() {
+    if (!canSpawnEnemies) return;
+    canSpawnEnemies = false;
+
+    const count = Phaser.Math.Between(2, 5);
+    const enemyTextures = ["enemy01", "enemy02", "enemy03", "enemy04"];
+
+    // We'll mark one enemy as dropper randomly
+    let dropEnemyIndex = Phaser.Math.Between(0, count - 1);
+
+    for(let i = 0; i < count; i++) {
+        const x = Phaser.Math.Between(50, this.sys.game.config.width - 50);
+        const y = Phaser.Math.Between(50, 150);
+        const texture = Phaser.Utils.Array.GetRandom(enemyTextures);
+
+        let enemy = enemyGroup.create(x, y, texture);
+
+        const speedX = Phaser.Math.Between(50, 150);
+        enemy.setVelocityX(Phaser.Math.Between(0, 1) ? speedX : -speedX);
+        enemy.setCollideWorldBounds(true);
+        enemy.setBounce(1, 0);
+        enemy.hp = Phaser.Math.Between(10, 40);
+
+        enemy.isDropper = (i === dropEnemyIndex); // Mark if enemy will drop item on death
+    }
+}
+
+// Handle plasma hitting enemy
+function plasmaHitsEnemy(plasma, enemy) {
+    plasma.destroy();
+
+    enemy.hp -= 2;
+
+    if (enemy.hp <= 0) {
+        enemy.destroy();
+
+        // If this enemy is dropper, spawn one random item near enemy position
+        if (enemy.isDropper) {
+            spawnRandomItem.call(this, enemy.x, enemy.y);
+        }
+
+        // You can add explosion or score effects here
+    }
+}
+
+// Handle enemy bullets hitting player
+function enemyBulletHitsPlayer(player, bullet) {
+    bullet.disableBody(true, true);
+    playerHp -= 2;
+    console.log("Player HP:", playerHp);
+    if (playerHp <= 0) {
+        player.destroy();
+        alert("Game Over!");
+        this.scene.restart();
+    }
+}
+
+// Handle enemy bullets hitting turret
+function enemyBulletHitsTurret(turretSprite, bullet) {
+    bullet.disableBody(true, true);
+    turretHp -= 5; // Turret takes 5 damage per hit
+
+    console.log("Turret HP:", turretHp);
+
+    if (turretHp <= 0) {
+        turret.destroy();
+        turret = null;
+        turretPlasmaGroup.clear(true, true);
+        console.log("Turret destroyed!");
+    }
+}
+
+// Spawn random item with weighted chances
+function spawnRandomItem(x, y) {
+    // Decide item type based on weighted chance
+    const rand = Math.random();
+
+    if (rand < 0.5) {
+        // Health item
+        let health = Phaser.Math.Between(10, 25);
+        let item = this.physics.add.image(x, y, 'healthItem');
+        item.setData('type', 'health');
+        item.setData('value', health);
+        item.setInteractive();
+        item.on('pointerdown', () => pickUpItem.call(this, item));
+    } else if (rand < 0.8) {
+        // Energy item (gives XP)
+        let xpGain = Phaser.Math.Between(10, 40);
+        let item = this.physics.add.image(x, y, 'energyItem');
+        item.setData('type', 'energy');
+        item.setData('value', xpGain);
+        item.setInteractive();
+        item.on('pointerdown', () => pickUpItem.call(this, item));
+    } else {
+        // Powerup item
+        let item = this.physics.add.image(x, y, 'powerupItem');
+        item.setData('type', 'powerup');
+        item.setInteractive();
+        item.on('pointerdown', () => pickUpItem.call(this, item));
+    }
+}
+
+// Pick up an item
+function pickUpItem(item) {
+    const type = item.getData('type');
+    const value = item.getData('value');
+
+    if (type === 'health') {
+        playerHp = Math.min(playerHp + value, 100);
+        console.log(`Picked health item. Player HP: ${playerHp}`);
+    } else if (type === 'energy') {
+        playerXp += value;
+        console.log(`Picked energy item. Player XP: ${playerXp}`);
+    } else if (type === 'powerup') {
+        if (!turret || !turret.active) {
+            addTurret.call(this);
+            console.log("Powerup collected! Turret assistant added.");
+        } else {
+            console.log("Powerup collected but turret already active.");
+        }
+    }
+
+    item.destroy();
+}
+
+// Add turret assistant on left or right of player that follows player and shoots plasma
+function addTurret() {
+    if (turret && turret.active) return; // turret already exists
+
+    // Position turret to left or right randomly
+    const side = Phaser.Math.Between(0, 1) ? 1 : -1;
+    turret = this.physics.add.image(player.x + side * 50, player.y, "turret01");
+    turret.setCollideWorldBounds(true);
+    turret.hp = 50; // initial turret HP
+
+    // Add turret plasma bullets group
+    turretPlasmaGroup = this.physics.add.group();
+
+    // Make turret shoot plasma every 500ms
+    turretShootTimer = this.time.addEvent({
+        delay: 500,
+        callback: () => {
+            if (!turret.active) return;
+
+            const plasma = turretPlasmaGroup.create(turret.x, turret.y - turret.displayHeight / 2, 'smallPlasma');
+            plasma.setVelocityY(-300);
+            plasma.setScale(0.5);
+            plasma.setDepth(1);
+            plasma.checkWorldBounds = true;
+            plasma.outOfBoundsKill = true;
+        },
+        callbackScope: this,
+        loop: true
+    });
+
+    // Overlap check: enemy bullets hitting turret
+    this.physics.add.overlap(turret, enemyBulletGroup, (turret, bullet) => {
+        bullet.disableBody(true, true); // hide and disable bullet
+
+        turret.hp -= 10; // damage turret by 10
+        if (turret.hp <= 0) {
+            turret.destroy();
+            turretShootTimer.remove(false);
+            turret = null;
+        }
+    });
+}
+
+function update(time, delta) {
+    if (!player) return;
+
+    // Scroll background downward for effect
+    bg.tilePositionY -= 0.5;
+
+    // Clamp player inside screen bounds just in case
+    player.x = Phaser.Math.Clamp(player.x, player.displayWidth / 2, this.sys.game.config.width - player.displayWidth / 2);
+    player.y = Phaser.Math.Clamp(player.y, player.displayHeight / 2, this.sys.game.config.height - player.displayHeight / 2);
+
+    // Make turret follow player smoothly if exists
+    if (turret && turret.active) {
+        const followSpeed = 0.1;
+        // Target position is offset on left or right side of player
+        let targetX = player.x + (turret.x < player.x ? -50 : 50);
+        let targetY = player.y;
+        turret.x += (targetX - turret.x) * followSpeed;
+        turret.y += (targetY - turret.y) * followSpeed;
+    }
+
+    // Clean plasma bullets that go out of bounds
+    plasmaGroup.children.each(plasma => {
+        if (plasma.y < -10) plasma.destroy();
+    });
+    turretPlasmaGroup.children.each(plasma => {
+        if (plasma.y < -10) plasma.destroy();
+    });
+
+    enemyBulletGroup.children.each(bullet => {
+        if (bullet.y > this.sys.game.config.height + 10) bullet.destroy();
+    });
+
+    // Enemies bounce inside screen horizontally
+    enemyGroup.children.each(enemy => {
+        if (enemy.x <= enemy.displayWidth / 2) enemy.setVelocityX(Math.abs(enemy.body.velocity.x));
+        if (enemy.x >= this.sys.game.config.width - enemy.displayWidth / 2) enemy.setVelocityX(-Math.abs(enemy.body.velocity.x));
+    });
+
+    // Schedule next enemy spawn if none alive
+    if (enemyGroup.countActive(true) === 0 && !enemySpawnTimer) {
+        scheduleEnemySpawn.call(this);
+        enemySpawnTimer = null;
+        canSpawnEnemies = true;
+    }
+}
+
+new Phaser.Game(config);
+</script>
+</body>
+</html>
